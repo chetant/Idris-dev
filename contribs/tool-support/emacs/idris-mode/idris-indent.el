@@ -303,7 +303,7 @@ Returns the location of the start of the comment, nil otherwise."
    ((looking-at "\\(\\([[:alpha:]]\\(\\sw\\|'\\)*\\)\\|_\\)[ \t\n]*")
     'ident)
    ((looking-at "\\(|[^|]\\)[ \t\n]*") 'guard)
-   ((looking-at "\\(=[^>=]\\|::\\|->\\|<-\\)[ \t\n]*") 'rhs)
+   ((looking-at "\\(=[^>=]\\|:\\|->\\|<-\\)[ \t\n]*") 'rhs)
    (t 'other)))
 
 (defvar idris-indent-current-line-first-ident ""
@@ -583,7 +583,7 @@ Returns the location of the start of the comment, nil otherwise."
                         idris-indent-start-keywords-re
                         idris-indent-current-line-first-ident))
                   (idris-indent-push-pos-offset valname))))
-        (if (string= idris-indent-current-line-first-ident "::")
+        (if (string= idris-indent-current-line-first-ident ":")
             (if valname (idris-indent-push-pos valname))
           (case                         ; general case
               (idris-indent-find-case test)
@@ -793,7 +793,7 @@ and find indentation info for each part."
 		      (nth 1 sep)
 		    (if (nth 5 sep)		; is there a rhs-sign
 			(if (= (char-after (nth 5 sep)) ?\:) ;is it a typdef
-			    "::" (nth 1 sep))
+			    ":" (nth 1 sep))
 		      "")))))
       (while contour-line		; explore the contour points
 	(setq line-start (pop contour-line))
