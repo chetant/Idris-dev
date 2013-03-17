@@ -58,6 +58,7 @@ This will either look for a Cabal file or a \"module\" statement in the file."
     ("^user error (\\(.*?\\):\\([0-9]+\\):.*?column \\([0-9]+\\).*?)" 1 2 3)
     ("^user error (\\(.*?\\):\\([0-9]+\\):.*?)" 1 2)
     ("^\\(.*?\\):\\([0-9]+\\):.*?" 1 2)
+    ("^\"\\(.+?\\)\"[ ]+(line[ ]+\\([0-9]+\\),[ ]+column[ ]+\\([0-9]+\\)):" 1 2 3)
     ))
 
 (define-derived-mode inferior-idris-mode comint-mode "Inf-Idris"
