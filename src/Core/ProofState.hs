@@ -157,7 +157,7 @@ unify' ctxt env topx topy =
    do ps <- get
       let dont = dontunify ps
       (u, fails) <- -- trace ("Trying " ++ show (topx, topy)) $ 
-                    lift $ unify ctxt env topx topy dont (holes ps)
+                     lift $ unify ctxt env topx topy dont (holes ps)
 --       trace ("Unified " ++ show (topx, topy) ++ " without " ++ show dont ++
 -- --              " in " ++ show env ++ 
 --              "\n" ++ show u ++ "\n" ++ qshow fails ++ "\nCurrent problems:\n"
@@ -444,8 +444,7 @@ intro n ctxt env _ = fail "Can't introduce here."
 forall :: Name -> Raw -> RunTactic
 forall n ty ctxt env (Bind x (Hole t) (P _ x' _)) | x == x' =
     do (tyv, tyt) <- lift $ check ctxt env ty
-       lift $ isType ctxt env tyt
-       lift $ isType ctxt env t
+       unify' ctxt env tyt (TType (UVar 0)) 
        return $ Bind n (Pi tyv) (Bind x (Hole t) (P Bound x t))
 forall n ty ctxt env _ = fail "Can't pi bind here"
 
