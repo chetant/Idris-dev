@@ -9,6 +9,7 @@ import Core.Elaborate hiding (Tactic(..))
 import Core.Typecheck
 import Idris.AbsSyntaxTree
 import IRTS.CodegenCommon
+import Util.DynamicLinker
 
 import Paths_idris
 
@@ -40,8 +41,19 @@ getLibs = do i <- getIState; return (idris_libs i)
 addLib :: String -> Idris ()
 addLib f = do i <- getIState; putIState $ i { idris_libs = f : idris_libs i }
 
+addDyLib :: String -> Idris ()
+addDyLib lib = do i <- getIState
+                  handle <- lift $ tryLoadLib lib
+                  case handle of
+                    Nothing -> fail $ "Could not load dynamic lib \"" ++ lib ++ "\""
+                    Just x -> do let libs = idris_dynamic_libs i
+                                 putIState $ i { idris_dynamic_libs = x:libs }
+
 addHdr :: String -> Idris ()
 addHdr f = do i <- getIState; putIState $ i { idris_hdrs = f : idris_hdrs i }
+
+addLangExt :: LanguageExt -> Idris ()
+addLangExt TypeProviders = do i <- getIState ; putIState $ i { idris_language_extensions = [TypeProviders] }
 
 totcheck :: (FC, Name) -> Idris ()
 totcheck n = do i <- getIState; putIState $ i { idris_totcheck = idris_totcheck i ++ [n] }
@@ -930,6 +942,9 @@ aiFn inpat expat ist fc f as
     find n (g : gs) acc = find n gs (g : acc)
 
 -- replace non-linear occurrences with _
+-- ASSUMPTION: This is called before adding 'alternatives' because otherwise
+-- it is hard to get right!
+
 stripLinear :: IState -> PTerm -> PTerm
 stripLinear i tm = evalState (sl tm) [] where 
     sl :: PTerm -> State [Name] PTerm
@@ -937,7 +952,7 @@ stripLinear i tm = evalState (sl tm) [] where
          | (_:_) <- lookupTy Nothing f (tt_ctxt i)
               = return $ PRef fc f
          | otherwise = do ns <- get
-                          trace (show (f, ns)) $ if (f `elem` ns)
+                          if (f `elem` ns)
                              then return Placeholder
                              else do put (f : ns)
                                      return (PRef fc f)

@@ -10,6 +10,7 @@ import Core.Typecheck
 import IRTS.Lang
 import IRTS.CodegenCommon
 import Util.Pretty
+import Util.DynamicLinker
 
 import Paths_idris
 
@@ -41,6 +42,8 @@ data IOption = IOption { opt_logLevel   :: Int,
     deriving (Show, Eq)
 
 defaultOpts = IOption 0 False False True False False True True False ViaC Executable "" [] []
+
+data LanguageExt = TypeProviders deriving (Show, Eq, Read, Ord)
 
 -- TODO: Add 'module data' to IState, which can be saved out and reloaded quickly (i.e
 -- without typechecking).
@@ -79,19 +82,21 @@ data IState = IState {
     idris_hdrs :: [String],
     proof_list :: [(Name, [String])],
     errLine :: Maybe Int,
-    lastParse :: Maybe Name, 
+    lastParse :: Maybe Name,
     indent_stack :: [Int],
     brace_stack :: [Maybe Int],
     hide_list :: [(Name, Maybe Accessibility)],
     default_access :: Accessibility,
     default_total :: Bool,
     ibc_write :: [IBCWrite],
-    compiled_so :: Maybe String
+    compiled_so :: Maybe String,
+    idris_dynamic_libs :: [DynamicLib],
+    idris_language_extensions :: [LanguageExt]
    }
 
 data SizeChange = Smaller | Same | Bigger | Unknown
     deriving (Show, Eq)
-{-! 
+{-!
 deriving instance Binary SizeChange
 !-}
 
@@ -123,6 +128,7 @@ data IBCWrite = IBCFix FixDecl
               | IBCImport FilePath
               | IBCObj FilePath
               | IBCLib String
+              | IBCDyLib String
               | IBCHeader String
               | IBCAccess Name Accessibility
               | IBCTotal Name Totality
@@ -137,7 +143,7 @@ idrisInit = IState initContext [] [] emptyContext emptyContext emptyContext
                    emptyContext emptyContext emptyContext emptyContext 
                    emptyContext emptyContext emptyContext emptyContext
                    [] "" defaultOpts 6 [] [] [] [] [] [] [] [] []
-                   [] Nothing Nothing [] [] [] Hidden False [] Nothing
+                   [] Nothing Nothing [] [] [] Hidden False [] Nothing [] []
 
 -- | The monad for the main REPL - reading and processing files and updating 
 -- global state (hence the IO inner monad).
@@ -181,6 +187,8 @@ data Command = Quit
              | Defn Name
              | Info Name
              | Missing Name
+             | DynamicLink FilePath
+             | ListDynamic
              | Pattelab PTerm
              | DebugInfo Name
              | Search PTerm
@@ -222,6 +230,7 @@ data Opt = Filename String
          | FOVM String
          | UseTarget Target
          | OutputTy OutputType
+         | Extension LanguageExt
     deriving (Show, Eq)
 
 -- Parsed declarations
@@ -332,12 +341,22 @@ data PDecl' t
    | PSyntax  FC Syntax -- ^ Syntax definition
    | PMutual  FC [PDecl' t] -- ^ Mutual block
    | PDirective (Idris ()) -- ^ Compiler directive. The parser inserts the corresponding action in the Idris monad.
+   | PProvider SyntaxInfo FC Name t t -- ^ Type provider. The first t is the type, the second is the term
   deriving Functor
 {-!
 deriving instance Binary PDecl'
 !-}
 
-data PClause' t = PClause  FC Name t [t] t [PDecl' t]
+-- | One clause of a top-level definition. Term arguments to constructors are:
+--
+-- 1. The whole application (missing for PClauseR and PWithR because they're within a "with" clause)
+--
+-- 2. The list of patterns
+--
+-- 3. The right-hand side
+--
+-- 4. The where block (PDecl' t)
+data PClause' t = PClause  FC Name t [t] t [PDecl' t] -- ^ A normal top-level definition.
                 | PWith    FC Name t [t] t [PDecl' t]
                 | PClauseR FC        [t] t [PDecl' t]
                 | PWithR   FC        [t] t [PDecl' t]
@@ -373,12 +392,19 @@ declared (PFix _ _ _) = []
 declared (PTy _ _ _ _ n t) = [n]
 declared (PPostulate _ _ _ _ n t) = [n]
 declared (PClauses _ _ n _) = [] -- not a declaration
-declared (PRecord _ _ _ n _ _ c _) = [n, c]
+declared (PCAF _ n _) = [n]
 declared (PData _ _ _ _ (PDatadecl n _ ts)) = n : map fstt ts
    where fstt (_, a, _, _) = a
+declared (PData _ _ _ _ (PLaterdecl n _)) = [n]
 declared (PParams _ _ ds) = concatMap declared ds
-declared (PMutual _ ds) = concatMap declared ds
 declared (PNamespace _ ds) = concatMap declared ds
+declared (PRecord _ _ _ n _ _ c _) = [n, c]
+declared (PClass _ _ _ _ n _ ms) = n : concatMap declared ms
+declared (PInstance _ _ _ _ _ _ _ _) = []
+declared (PDSL n _) = [n]
+declared (PSyntax _ _) = []
+declared (PMutual _ ds) = concatMap declared ds
+declared (PDirective _) = []
 
 -- get the names declared, not counting nested parameter blocks
 tldeclared :: PDecl -> [Name]
@@ -392,20 +418,27 @@ tldeclared (PData _ _ _ _ (PDatadecl n _ ts)) = n : map fstt ts
 tldeclared (PParams _ _ ds) = [] 
 tldeclared (PMutual _ ds) = concatMap tldeclared ds
 tldeclared (PNamespace _ ds) = concatMap tldeclared ds
--- declared (PImport _) = []
+
 
 defined :: PDecl -> [Name]
 defined (PFix _ _ _) = []
 defined (PTy _ _ _ _ n t) = []
 defined (PPostulate _ _ _ _ n t) = []
 defined (PClauses _ _ n _) = [n] -- not a declaration
-defined (PRecord _ _ _ n _ _ c _) = [n, c]
+defined (PCAF _ n _) = [n]
 defined (PData _ _ _ _ (PDatadecl n _ ts)) = n : map fstt ts
    where fstt (_, a, _, _) = a
+defined (PData _ _ _ _ (PLaterdecl n _)) = []
 defined (PParams _ _ ds) = concatMap defined ds
-defined (PMutual _ ds) = concatMap defined ds
 defined (PNamespace _ ds) = concatMap defined ds
--- declared (PImport _) = []
+defined (PRecord _ _ _ n _ _ c _) = [n, c]
+defined (PClass _ _ _ _ n _ ms) = n : concatMap defined ms
+defined (PInstance _ _ _ _ _ _ _ _) = []
+defined (PDSL n _) = [n]
+defined (PSyntax _ _) = []
+defined (PMutual _ ds) = concatMap defined ds
+defined (PDirective _) = []
+--defined _ = []
 
 updateN :: [(Name, Name)] -> Name -> Name
 updateN ns n | Just n' <- lookup n ns = n'

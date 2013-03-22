@@ -11,11 +11,13 @@ import Idris.Imports
 import Idris.ElabTerm
 import Idris.Coverage
 import Idris.DataOpts
+import Idris.Providers
 import Paths_idris
 
 import Core.TT
 import Core.Elaborate hiding (Tactic(..))
 import Core.Evaluate
+import Core.Execute
 import Core.Typecheck
 import Core.CaseTree
 
@@ -38,6 +40,7 @@ checkDef fc ns = do ctxt <- getContext
                     mapM (\(n, t) -> do (t', _) <- recheckC fc [] t
                                         return (n, t')) ns
 
+-- | Elaborate a top-level type declaration - for example, "foo : Int -> Int".
 elabType :: ElabInfo -> SyntaxInfo -> String ->
             FC -> FnOpts -> Name -> PTerm -> Idris ()
 elabType info syn doc fc opts n ty' = {- let ty' = piBind (params info) ty_in 
@@ -185,6 +188,29 @@ elabData info syn doc fc codata (PDatadecl n t_in dcons)
              = (mn, False) : updateParamsA ns args (p : all)
         updateParamsA ps args all = ps
 
+-- | Elaborate a type provider
+elabProvider :: ElabInfo -> SyntaxInfo -> FC -> Name -> PTerm -> PTerm -> Idris ()
+elabProvider info syn fc n ty tm
+    = do i <- getIState
+         if not (TypeProviders `elem` idris_language_extensions i)
+           then fail $ "Failed to define type provider \"" ++ show n ++
+                       "\".\nYou must turn on TypeProviders extension."
+           else do let expected = providerTy fc ty
+                   let using = unProv fc tm
+                   logLvl 1 $ "** Providing " ++
+                              show n ++ " : " ++ show expected ++
+                              " as " ++ show using
+                   (e', et) <- elabVal toplevel False using
+                   ctxt <- getContext
+                   let e'' = normaliseAll ctxt [] e'
+                   logLvl 1 $ "Term is " ++ show e''
+                   let et' = normaliseAll ctxt [] et
+                   elabType info syn "" fc [] n ty
+                   rhs <- execute e''
+                   elabClauses info fc [] n [PClause fc n (PRef fc $ n) [] (delab i rhs) []]
+                   logLvl 1 $ "** Elaborated: " ++ show e' ++ " :as: " ++ show et
+                   logLvl 1 $ "** Evaluated: " ++ show rhs ++ " :as: " ++ show et'
+
 elabRecord :: ElabInfo -> SyntaxInfo -> String -> FC -> Name -> 
               PTerm -> String -> Name -> PTerm -> Idris ()
 elabRecord info syn doc fc tyn ty cdoc cn cty
@@ -329,6 +355,8 @@ elabCon info syn tn codata (doc, n, t_in, fc)
     mkLazy (PPi pl n ty sc) = PPi (pl { plazy = True }) n ty (mkLazy sc)
     mkLazy t = t
 
+-- | Elaborate a collection of left-hand and right-hand pairs - that is, a
+-- top-level definition.
 elabClauses :: ElabInfo -> FC -> FnOpts -> Name -> [PClause] -> Idris ()
 elabClauses info fc opts n_in cs = let n = liftname info n_in in  
       do ctxt <- getContext
@@ -548,7 +576,7 @@ elabClause info tcgen (cnum, PClause fc fname lhs_in withs rhs_in whereblock)
                          [t] -> t
                          _ -> [] 
         let params = getParamsInType i [] fn_is fn_ty
-        let lhs = stripLinear i $ addImplPat i (propagateParams params lhs_in)
+        let lhs = addImplPat i (propagateParams params (stripLinear i lhs_in))
         logLvl 5 ("LHS: " ++ show fc ++ " " ++ showImp True lhs)
         logLvl 4 ("Fixed parameters: " ++ show params ++ " from " ++ show (fn_ty, fn_is))
         ((lhs', dlhs, []), _) <- 
@@ -1263,6 +1291,10 @@ elabDecl' _ info (PDSL n dsl)
          addIBC (IBCDSL n)
 elabDecl' what info (PDirective i) 
   | what /= EDefns = i
+elabDecl' what info (PProvider syn fc n tp tm)
+  | what /= EDefns
+    = do iLOG $ "Elaborating type provider " ++ show n
+         elabProvider info syn fc n tp tm
 elabDecl' _ _ _ = return () -- skipped this time 
 
 elabCaseBlock info d@(PClauses f o n ps) 
