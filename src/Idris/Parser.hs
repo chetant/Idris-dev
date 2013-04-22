@@ -613,7 +613,6 @@ pNoExtExpr syn =
      <|> pRewriteTerm syn
      <|> pPi syn 
      <|> pDoBlock syn
-     <|> pComprehension syn
     
 pExtensions :: SyntaxInfo -> [Syntax] -> IParser PTerm
 pExtensions syn rules = choice (map (try . pExt syn) (filter valid rules))
@@ -763,6 +762,7 @@ pSimpleExpr syn =
                     fc <- pfc
                     return (PInferRef fc x))
         <|> try (pList syn)
+        <|> try (pComprehension syn)
         <|> try (pAlt syn)
         <|> try (pIdiom syn)
         <|> try (do lchar '('
@@ -881,7 +881,7 @@ pApp syn = do f <- pSimpleExpr syn
               return (dslify i $ PApp fc f args)
   where
     dslify i (PApp fc (PRef _ f) [a])
-        | [d] <- lookupCtxt Nothing f (idris_dsls i)
+        | [d] <- lookupCtxt f (idris_dsls i)
             = desugar (syn { dsl_info = d }) i (getTm a)
     dslify i t = t
 
@@ -975,7 +975,9 @@ pLet syn = try (do reserved "let"; n <- pName;
                    return (PCase fc v [(pat, sc)]))
 
 pPi syn = 
-     try (do lazy <- option False (do lchar '|'; return True)
+     try (do lazy <- if implicitAllowed syn -- laziness is top level only
+                        then option False (do lchar '|'; return True)
+                        else return False
              st <- pStatic
              lchar '('; xt <- tyDeclList syn; lchar ')'
              doc <- option "" (pDocComment '^')
