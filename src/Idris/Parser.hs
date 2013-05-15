@@ -30,6 +30,7 @@ import qualified Text.Parsec.Token as PTok
 import Data.List
 import Data.List.Split(splitOn)
 import Control.Monad.State
+import Control.Monad.Error
 import Debug.Trace
 import Data.Maybe
 import System.FilePath
@@ -273,7 +274,7 @@ pfc = do s <- getPosition
 pImport :: IParser String
 pImport = do reserved "import"; f <- identifier; option ';' (lchar ';')
              return (toPath f)
-  where toPath n = foldl1 (</>) $ splitOn "." n
+  where toPath n = foldl1' (</>) $ splitOn "." n
 
 -- | A program is a list of declarations, possibly with associated
 -- documentation strings.
@@ -1363,7 +1364,8 @@ pClause syn
                    cargs <- many (pConstraintArg syn)
                    iargs <- many (pImplicitArg (syn { inPattern = True } ))
                    fc <- pfc
-                   args <- many (pArgExpr syn)
+                   args <- many (try (pImplicitArg (syn { inPattern = True } ))
+                                 <|> (fmap pexp (pArgExpr syn)))
                    wargs <- many (pWExpr syn)
                    rhs <- pRHS syn n
                    ist <- getState
@@ -1375,7 +1377,7 @@ pClause syn
                                              do pTerminator
                                                 return ([], [])]
                    let capp = PApp fc (PRef fc n) 
-                                (iargs ++ cargs ++ map pexp args)
+                                (iargs ++ cargs ++ args)
                    ist <- getState
                    setState (ist { lastParse = Just n })
                    return $ PClause fc n capp wargs rhs wheres)
@@ -1401,10 +1403,11 @@ pClause syn
                    cargs <- many (pConstraintArg syn)
                    iargs <- many (pImplicitArg (syn { inPattern = True } ))
                    fc <- pfc
-                   args <- many (pArgExpr syn)
+                   args <- many (try (pImplicitArg (syn { inPattern = True } )) 
+                                 <|> (fmap pexp (pArgExpr syn)))
                    wargs <- many (pWExpr syn)
                    let capp = PApp fc (PRef fc n) 
-                                (iargs ++ cargs ++ map pexp args)
+                                (iargs ++ cargs ++ args)
                    ist <- getState
                    setState (ist { lastParse = Just n })
                    reserved "with"
@@ -1512,9 +1515,12 @@ pDirective syn = try (do lchar '%'; reserved "lib"; lib <- strlit;
                                                 putIState (i { default_total = tot }))])
              <|> try (do lchar '%'; reserved "logging"; i <- natural;
                          return [PDirective (setLogLevel (fromInteger i))])
-             <|> try (do lchar '%'; reserved "dynamic"; lib <- strlit;
-                         return [PDirective (do addIBC (IBCDyLib lib)
-                                                addDyLib lib)])
+             <|> try (do lchar '%'; reserved "dynamic"; libs <- sepBy1 strlit (lchar ',');
+                         return [PDirective (do added <- addDyLib libs
+                                                case added of
+                                                  Left lib -> addIBC (IBCDyLib (lib_name lib))
+                                                  Right msg ->
+                                                      fail $ msg)])
              <|> try (do lchar '%'; reserved "language"; ext <- reserved "TypeProviders";
                          return [PDirective (addLangExt TypeProviders)])
 

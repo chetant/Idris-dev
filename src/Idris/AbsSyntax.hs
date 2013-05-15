@@ -8,6 +8,7 @@ import Core.Evaluate
 import Core.Elaborate hiding (Tactic(..))
 import Core.Typecheck
 import Idris.AbsSyntaxTree
+import Idris.IdeSlave
 import IRTS.CodegenCommon
 import Util.DynamicLinker
 
@@ -24,7 +25,7 @@ import Data.Either
 import Debug.Trace
 
 import Util.Pretty
-
+import Util.System
 
 getContext :: Idris Context
 getContext = do i <- getIState; return (tt_ctxt i)
@@ -41,13 +42,15 @@ getLibs = do i <- getIState; return (idris_libs i)
 addLib :: String -> Idris ()
 addLib f = do i <- getIState; putIState $ i { idris_libs = f : idris_libs i }
 
-addDyLib :: String -> Idris ()
-addDyLib lib = do i <- getIState
-                  handle <- lift $ tryLoadLib lib
-                  case handle of
-                    Nothing -> fail $ "Could not load dynamic lib \"" ++ lib ++ "\""
-                    Just x -> do let libs = idris_dynamic_libs i
-                                 putIState $ i { idris_dynamic_libs = x:libs }
+addDyLib :: [String] -> Idris (Either DynamicLib String)
+addDyLib libs = do i <- getIState
+                   handle <- lift $ mapM (\l -> catchIO (tryLoadLib l) (\_ -> return Nothing)) libs
+                   case msum handle of
+                     Nothing -> return (Right $ "Could not load dynamic alternatives \"" ++
+                                                concat (intersperse "," libs) ++ "\"")
+                     Just x -> do let ls = idris_dynamic_libs i
+                                  putIState $ i { idris_dynamic_libs = x:ls }
+                                  return (Left x)
 
 addHdr :: String -> Idris ()
 addHdr f = do i <- getIState; putIState $ i { idris_hdrs = f : idris_hdrs i }
@@ -220,10 +223,14 @@ addConstraints fc (v, cs)
          let ics = zip cs (repeat fc) ++ idris_constraints i
          putIState $ i { tt_ctxt = ctxt', idris_constraints = ics }
 
-addDeferred :: [(Name, Type)] -> Idris ()
-addDeferred ns = do mapM_ (\(n, t) -> updateContext (addTyDecl n (tidyNames [] t))) ns
-                    i <- getIState
-                    putIState $ i { idris_metavars = map fst ns ++ idris_metavars i }
+addDeferred = addDeferred' Ref
+addDeferredTyCon = addDeferred' (TCon 0 0)
+
+addDeferred' :: NameType -> [(Name, Type)] -> Idris ()
+addDeferred' nt ns 
+  = do mapM_ (\(n, t) -> updateContext (addTyDecl n nt (tidyNames [] t))) ns
+       i <- getIState
+       putIState $ i { idris_metavars = map fst ns ++ idris_metavars i }
   where tidyNames used (Bind (MN i x) b sc)
             = let n' = uniqueName (UN x) used in
                   Bind n' b $ tidyNames (n':used) sc
@@ -236,11 +243,43 @@ solveDeferred :: Name -> Idris ()
 solveDeferred n = do i <- getIState
                      putIState $ i { idris_metavars = idris_metavars i \\ [n] }
 
+iResult :: String -> Idris ()
+iResult s = do i <- getIState
+               case idris_outputmode i of
+                 RawOutput -> case s of
+                                   "" -> return ()
+                                   s  -> liftIO $ putStrLn s
+                 IdeSlave n ->
+                   let good = SexpList [SymbolAtom "ok", toSExp s] in
+                       liftIO $ putStrLn $ convSExp "return" good n
+
+iFail :: String -> Idris ()
+iFail s = do i <- getIState
+             case idris_outputmode i of
+               RawOutput -> case s of
+                                 "" -> return ()
+                                 s  -> liftIO $ putStrLn s
+               IdeSlave n ->
+                 let good = SexpList [SymbolAtom "error", toSExp s] in
+                     liftIO $ putStrLn $ convSExp "return" good n
+
 iputStrLn :: String -> Idris ()
-iputStrLn = liftIO . putStrLn
+iputStrLn s = do i <- getIState
+                 case idris_outputmode i of
+                   RawOutput -> liftIO $ putStrLn s
+                   IdeSlave n ->
+                     case span (/=':') s of
+                       (fn, ':':rest) -> case span isDigit rest of
+                         ([], ':':msg) -> iWarn (FC fn 0) msg
+                         ([], msg) -> iWarn (FC fn 0) msg
+                         (num, ':':msg) -> iWarn (FC fn (read num)) msg
+                       _  -> liftIO $ putStrLn $ convSExp "write-string" s n
 
 iWarn :: FC -> String -> Idris ()
-iWarn fc err = liftIO $ putStrLn (show fc ++ ":" ++ err)
+iWarn fc err = do i <- getIState
+                  case idris_outputmode i of
+                    RawOutput -> liftIO $ putStrLn (show fc ++ ":" ++ err)
+                    IdeSlave n -> liftIO $ putStrLn $ convSExp "warning" (fc_fname fc, fc_line fc, err) n
 
 setLogLevel :: Int -> Idris ()
 setLogLevel l = do i <- getIState
@@ -316,6 +355,11 @@ setOutputTy t = do i <- getIState
 outputTy :: Idris OutputType
 outputTy = do i <- getIState
               return $ opt_outputTy $ idris_options i
+
+setIdeSlave :: Bool -> Idris ()
+setIdeSlave True  = do i <- getIState
+                       putIState $ i { idris_outputmode = (IdeSlave 0) }
+setIdeSlave False = return ()
 
 verbose :: Idris Bool
 verbose = do i <- getIState
