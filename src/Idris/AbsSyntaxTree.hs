@@ -41,7 +41,21 @@ data IOption = IOption { opt_logLevel   :: Int,
                        }
     deriving (Show, Eq)
 
-defaultOpts = IOption 0 False False True False False True True False ViaC Executable "" [] []
+defaultOpts = IOption { opt_logLevel   = 0
+                      , opt_typecase   = False
+                      , opt_typeintype = False
+                      , opt_coverage   = True
+                      , opt_showimp    = False
+                      , opt_errContext = False
+                      , opt_repl       = True
+                      , opt_verbose    = True
+                      , opt_quiet      = False
+                      , opt_target     = ViaC
+                      , opt_outputTy   = Executable
+                      , opt_ibcsubdir  = ""
+                      , opt_importdirs = []
+                      , opt_cmdline    = []
+                      }
 
 data LanguageExt = TypeProviders deriving (Show, Eq, Read, Ord)
 
@@ -709,7 +723,14 @@ initDSL = DSL (PRef f (UN ">>="))
               Nothing
   where f = FC "(builtin)" 0
 
-data SyntaxInfo = Syn { using :: [(Name, PTerm)],
+data Using = UImplicit Name PTerm
+           | UConstraint Name [Name]
+    deriving (Show, Eq)
+{-!
+deriving instance Binary Using
+!-}
+
+data SyntaxInfo = Syn { using :: [Using],
                         syn_params :: [(Name, PTerm)],
                         syn_namespace :: [String],
                         no_imp :: [Name],
