@@ -808,22 +808,21 @@ pCaseOpt syn = do lhs <- pExpr (syn { inPattern = True })
 
 modifyConst :: SyntaxInfo -> FC -> PTerm -> PTerm
 modifyConst syn fc (PConstant (BI x)) 
-    | not (fitsInt x) = PAlternative False 
-                           [PConstant (BI x),
-                            PApp fc (PRef fc (UN "fromInteger"))
-                                 [pexp (PConstant (I (fromInteger x)))]]
     | not (inPattern syn)
         = PAlternative False
-             [PApp fc (PRef fc (UN "fromInteger")) [pexp (PConstant (I (fromInteger x)))],
-              PConstant (I (fromInteger x)), PConstant (BI x)]
-    | otherwise = PAlternative False
-                     [PConstant (I (fromInteger x)), PConstant (BI x)]
+             (PApp fc (PRef fc (UN "fromInteger")) [pexp (PConstant (BI (fromInteger x)))]
+             : consts)
+    | otherwise = PAlternative False consts
+    where
+      consts = [ PConstant (BI x)
+               , PConstant (I (fromInteger x))
+               , PConstant (B8 (fromInteger x))
+               , PConstant (B16 (fromInteger x))
+               , PConstant (B32 (fromInteger x))
+               , PConstant (B64 (fromInteger x))
+               ]
 modifyConst syn fc x = x
 
-fitsInt :: Integer -> Bool
-fitsInt x = let xInt :: Int = fromInteger x
-                xInteger :: Integer = toInteger xInt in
-                x == xInteger
 
 pList syn = do lchar '['; fc <- pfc; xs <- sepBy (pExpr syn) (lchar ','); lchar ']'
                return (mkList fc xs)
@@ -1149,7 +1148,7 @@ pStatic = do lchar '['
 
 table fixes 
    = [[prefix "-" (\fc x -> PApp fc (PRef fc (UN "-")) 
-        [pexp (PApp fc (PRef fc (UN "fromInteger")) [pexp (PConstant (I 0))]), pexp x])]] 
+        [pexp (PApp fc (PRef fc (UN "fromInteger")) [pexp (PConstant (BI 0))]), pexp x])]]
        ++ toTable (reverse fixes) ++
       [[backtick],
        [binary "="  PEq AssocLeft],
@@ -1500,18 +1499,25 @@ pWhereblock n syn
          closeBlock
          return (concat ds, map (\x -> (x, decoration syn x)) dns)
 
+pTarget :: IParser Target
+pTarget = try (do reserved "C"; return ViaC)
+      <|> try (do reserved "Java"; return ViaJava)
+      <|> try (do reserved "JavaScript"; return ViaJavaScript)
+      <|> try (do reserved "Node"; return ViaNode)
+      <|> try (do reserved "Bytecode"; return Bytecode)
+
 pDirective :: SyntaxInfo -> IParser [PDecl]
-pDirective syn = try (do lchar '%'; reserved "lib"; lib <- strlit;
-                         return [PDirective (do addLib lib
-                                                addIBC (IBCLib lib))])
-             <|> try (do lchar '%'; reserved "link"; obj <- strlit;
+pDirective syn = try (do lchar '%'; reserved "lib"; tgt <- pTarget; lib <- strlit;
+                         return [PDirective (do addLib tgt lib
+                                                addIBC (IBCLib tgt lib))])
+             <|> try (do lchar '%'; reserved "link"; tgt <- pTarget; obj <- strlit;
                          return [PDirective (do datadir <- liftIO getDataDir
                                                 o <- liftIO $ findInPath [".", datadir] obj
-                                                addIBC (IBCObj o)
-                                                addObjectFile o)])
-             <|> try (do lchar '%'; reserved "include"; hdr <- strlit;
-                         return [PDirective (do addHdr hdr
-                                                addIBC (IBCHeader hdr))])
+                                                addIBC (IBCObj tgt o)
+                                                addObjectFile tgt o)])
+             <|> try (do lchar '%'; reserved "include"; tgt <- pTarget; hdr <- strlit;
+                         return [PDirective (do addHdr tgt hdr
+                                                addIBC (IBCHeader tgt hdr))])
              <|> try (do lchar '%'; reserved "hide"; n <- iName []
                          return [PDirective (do setAccessibility n Hidden
                                                 addIBC (IBCAccess n Hidden))])
