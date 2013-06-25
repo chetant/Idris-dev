@@ -1,5 +1,6 @@
 package org.idris.rts;
 
+import java.lang.reflect.Array;
 import java.lang.reflect.InvocationTargetException;
 import java.util.Arrays;
 import java.util.List;
@@ -247,6 +248,26 @@ public class ForeignPrimitives {
             context[i] = var;
         }
         return context;
+    }
+
+    public final static Object getClassForName(final String clsName) throws ClassNotFoundException
+    {
+        switch(clsName)
+        {
+        case "byte": return  byte.class;
+        case "short": return  short.class;
+        case "char": return  char.class;
+        case "int": return  int.class;
+        case "long": return  long.class;
+        case "float": return  float.class;
+        case "double": return  double.class;
+        default: return Class.forName(clsName);
+        }
+    }
+
+    public final static Object newArray(final Object obj, final int len) throws NoSuchMethodException, IllegalAccessException, InvocationTargetException {
+        Class cls = (obj instanceof Class ? (Class)obj : obj.getClass());
+        return Array.newInstance(cls, len);
     }
 
     public final static Object invokeOn(final Object obj, final String methodName, Object... args) throws NoSuchMethodException, IllegalAccessException, InvocationTargetException {

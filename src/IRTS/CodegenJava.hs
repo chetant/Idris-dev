@@ -1386,8 +1386,6 @@ mkExp (SOp LStrFloat [arg]) =
   mkPrimitiveCast doubleType stringType arg
 mkExp (SOp (LSExt ITNative ITBig) [arg]) =
   mkPrimitiveCast integerType bigIntegerType arg
-mkExp (SOp (LTrunc ITBig ITNative) [arg]) =
-  mkPrimitiveCast bigIntegerType integerType arg
 mkExp (SOp (LChInt ITNative) [arg]) =
   mkVarAccess (Just integerType) arg
 mkExp (SOp (LIntCh ITNative) [arg]) =
@@ -1482,7 +1480,8 @@ mkExp (SOp (LSExt from to) [var])
     | intTyWidth from < intTyWidth to
         = mkSignedExt (intTyToMethod to) (intTyToClass from) (intTyToClass to) var
 mkExp (SOp (LTrunc from to) [var])
-    | intTyWidth from > intTyWidth to
+    | (from == ITBig && to == ITNative) ||
+      (intTyWidth from > intTyWidth to)
         = mkSignedExt (intTyToMethod to) (intTyToClass from) (intTyToClass to) var
 mkExp (SOp LFExp [arg]) = mkMathFun "exp" arg
 mkExp (SOp LFLog [arg]) = mkMathFun "log" arg
